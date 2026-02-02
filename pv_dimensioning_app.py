@@ -303,57 +303,96 @@ class HouseholdModel:
         print(f"Household occupancy rate: {occupancy_rate:.1f}%")
         
         return household_profile
-    
     def generate_consumption_profile(self, 
                                      household_profile: np.ndarray,
                                      education_level: str = 'university') -> np.ndarray:
         """
         Generate hourly electricity consumption profile based on:
         - Household occupation
-        - Appliances (based on education level or custom selection)
-        
+        - Stochastic appliance usage
+
         Returns 8760 array of power consumption in kWh per hour
+
+        education_level is used as a proxy for energy efficiency/awareness:
+        higher education_level => LOWER consumption (more efficient appliances & behavior).
         """
         consumption = np.zeros(8760)
-        
-        # Base load (always on devices: router, fridge standby, etc.)
-        base_load = 0.15  # kW constant
-        consumption += base_load
-        
-        # Add stochastic appliance usage when people are home
+
+        # --- 1) Map education_level -> efficiency factors (higher => lower) ---
+        level = (education_level or "university").lower().strip()
+
+        # Simple, explainable factors. Tune later if needed.
+        factors = {
+            "basic": {
+                "base_load": 0.18,        # higher standby/older appliances
+                "prob_mult": 1.05,        # slightly more frequent peaks
+                "peak_mult": 1.10,        # bigger peaks (less efficient appliances)
+                "occ_low": 0.35,          # higher background load when home
+                "occ_high": 0.95,
+                "wash_per_week": 3.5,
+            },
+            "high_school": {
+                "base_load": 0.15,
+                "prob_mult": 1.00,
+                "peak_mult": 1.00,
+                "occ_low": 0.30,
+                "occ_high": 0.80,
+                "wash_per_week": 3.0,
+            },
+            "university": {
+                "base_load": 0.12,        # lower standby/efficient appliances
+                "prob_mult": 0.95,        # slightly less frequent peaks
+                "peak_mult": 0.90,        # smaller peaks
+                "occ_low": 0.22,
+                "occ_high": 0.60,
+                "wash_per_week": 2.7,
+            },
+        }
+        f = factors.get(level, factors["university"])
+
+        # --- 2) Base load (always-on devices: router, fridge standby, etc.) ---
+        consumption += f["base_load"]
+
+        # --- 3) Stochastic appliance usage when people are home ---
         for hour in range(8760):
             if household_profile[hour] == 1:
+                hod = hour % 24
+
                 # Morning (6-10): kettle, coffee, breakfast
-                if hour % 24 in range(6, 10):
-                    if np.random.random() < 0.3:
-                        consumption[hour] += np.random.uniform(1.5, 2.5)
-                
+                if hod in range(6, 10):
+                    if np.random.random() < 0.3 * f["prob_mult"]:
+                        consumption[hour] += np.random.uniform(1.5, 2.5) * f["peak_mult"]
+
                 # Midday (11-14): cooking
-                if hour % 24 in range(11, 14):
-                    if np.random.random() < 0.2:
-                        consumption[hour] += np.random.uniform(1.0, 2.0)
-                
+                if hod in range(11, 14):
+                    if np.random.random() < 0.2 * f["prob_mult"]:
+                        consumption[hour] += np.random.uniform(1.0, 2.0) * f["peak_mult"]
+
                 # Evening (17-22): cooking, TV, lighting, appliances
-                if hour % 24 in range(17, 22):
-                    if np.random.random() < 0.4:
-                        consumption[hour] += np.random.uniform(2.0, 3.5)
-                
-                # General occupancy load
-                consumption[hour] += np.random.uniform(0.3, 0.8)
-        
-        # Add washing machine (few times per week)
+                if hod in range(17, 22):
+                    if np.random.random() < 0.4 * f["prob_mult"]:
+                        consumption[hour] += np.random.uniform(2.0, 3.5) * f["peak_mult"]
+
+                # General occupancy load (background)
+                consumption[hour] += np.random.uniform(f["occ_low"], f["occ_high"])
+
+        # --- 4) Washing machine (few times per week) ---
         days_per_year = 365
-        washing_days = np.random.choice(days_per_year, size=int(days_per_year * 3 / 7), replace=False)
-        for day in washing_days:
-            wash_hour = day * 24 + np.random.randint(8, 20)
-            if wash_hour < 8760:
-                consumption[wash_hour:wash_hour+2] += 1.5  # 1.5 kW for 2 hours
-        
+        wash_days_count = int(days_per_year * (f["wash_per_week"] / 7.0))
+        wash_days_count = max(0, min(days_per_year, wash_days_count))
+
+        if wash_days_count > 0:
+            washing_days = np.random.choice(days_per_year, size=wash_days_count, replace=False)
+            for day in washing_days:
+                wash_hour = day * 24 + np.random.randint(8, 20)
+                if wash_hour < 8760:
+                    consumption[wash_hour:wash_hour+2] += 1.5 * f["peak_mult"]  # 1.5 kW for 2 hours
+
         annual_consumption = np.sum(consumption)
-        print(f"Annual consumption (appliances): {annual_consumption:.0f} kWh")
-        
+        print(f"Annual consumption (appliances): {annual_consumption:.0f} kWh (education_level={level})")
+
         return consumption
-    
+
     def add_ev_consumption(self, consumption: np.ndarray, 
                           battery_capacity: float, 
                           annual_km: float) -> np.ndarray:
