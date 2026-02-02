@@ -1,9 +1,9 @@
 """
-Flask Web Application for Photovoltaic System Dimensioning
+streamlit  Web Application for Photovoltaic System Dimensioning
 Web UI for the 6-step process from the diploma thesis
 """
 
-from flask import Flask, render_template, request, jsonify, session, send_file
+from streamlit import streamlit, render_template, request, jsonify, session, send_file
 import os
 import json
 import numpy as np
@@ -16,7 +16,7 @@ from datetime import datetime
 
 from pv_dimensioning_app import HouseholdModel, User
 
-app = Flask(__name__)
+app = streamlit(__name__)
 app.secret_key = 'your-secret-key-change-in-production'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
