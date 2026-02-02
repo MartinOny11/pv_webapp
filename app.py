@@ -1,18 +1,6 @@
-"""
-streamlit  Web Application for Photovoltaic System Dimensioning
-Web UI for the 6-step process from the diploma thesis
-"""
-
-from streamlit import streamlit, render_template, request, jsonify, session, send_file
-import os
-import json
+import streamlit as st
 import numpy as np
-from pathlib import Path
-import io
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from datetime import datetime
+import pandas as pd
 
 from pv_dimensioning_app import HouseholdModel, User
 
