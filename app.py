@@ -433,6 +433,8 @@ elif int(st.session_state.step) == 7:
             education_level=education_level,
         )
         base_consumption = float(np.sum(consumption))
+st.write("DEBUG: education_level použité ve výpočtu:", education_level)
+st.write("DEBUG: roční spotřeba (kWh):", float(np.sum(consumption)))
 
         # EV
         ev_cfg = st.session_state.ev or {}
