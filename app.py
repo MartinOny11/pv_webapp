@@ -264,7 +264,7 @@ elif int(st.session_state.step) == 3:
     if method == "quick_estimate":
         education_level = st.selectbox("Úroveň (pro rychlý odhad)", ["basic", "high_school", "university"], index=2)
         st.session_state.appliances = {"method": "quick_estimate", "education_level": education_level}
-        st.info("Rychlý odhad používá tvůj model (education_level je zatím jen parametr).")
+        st.info("Rychlý odhad používá stochastický model; education_level ovlivňuje velikost/četnost špiček a základní spotřebu.")
 
     else:
         st.warning(
@@ -310,49 +310,54 @@ elif int(st.session_state.step) == 4:
 elif int(st.session_state.step) == 5:
     st.header("Krok 5: Dům")
 
-    method = st.radio("Způsob zadání domu", ["predefined", "custom"], index=0, horizontal=True)
+    if len(getattr(model, "house_profiles", {})) < 50:
+        st.warning(f"V P4 je načteno jen {len(getattr(model, 'house_profiles', {}))} profilů (čekáno 50). Pokud se vytápění neprojeví, zkontroluj Excel P4 ve složce data/.")
 
-    if method == "predefined":
-        profile_ids = sorted(list(model.house_profiles.keys()))
-        if not profile_ids:
-            st.warning("House profily nejsou načteny. Můžeš použít custom.")
-        profile_id = st.selectbox("Profil domu (P4)", profile_ids[:50] if profile_ids else [1])
-        floors = st.selectbox("Podlaží", [1, 2], index=0)
-        year = st.number_input("Rok výstavby", min_value=1900, max_value=2100, value=2000, step=1)
-        floor_area = st.number_input("Podlahová plocha (m²)", min_value=20.0, max_value=600.0, value=100.0, step=5.0)
-
-        st.session_state.house = {
-            "method": "predefined",
-            "profile_id": int(profile_id),
-            "floors": int(floors),
-            "year": int(year),
-            "floor_area": float(floor_area),
-        }
-
-    else:
-        floor_area = st.number_input("Podlahová plocha (m²)", min_value=20.0, max_value=600.0, value=120.0, step=5.0)
-        construction_year = st.number_input("Rok výstavby", min_value=1900, max_value=2100, value=2005, step=1)
-        roof_type = st.selectbox("Typ střechy", ["flat", "pitched"], index=1)
-        roof_orientation = st.selectbox("Orientace střechy", ["south", "east", "west", "north", "southeast", "southwest"], index=0)
-        roof_slope = st.number_input("Sklon střechy (°)", min_value=0.0, max_value=90.0, value=35.0, step=1.0)
-        wall_material = st.selectbox("Materiál zdiva", ["brick", "concrete", "wood", "other"], index=0)
-        wall_thickness = st.number_input("Tloušťka stěny (m)", min_value=0.1, max_value=1.0, value=0.4, step=0.05)
-
-        st.session_state.house = {
-            "method": "custom",
-            "floor_area": float(floor_area),
-            "construction_year": int(construction_year),
-            "roof_type": roof_type,
-            "roof_orientation": roof_orientation,
-            "roof_slope": float(roof_slope),
-            "wall_material": wall_material,
-            "wall_thickness": float(wall_thickness),
-        }
-
-    st.info(
-        "Pozn.: V aktuální verzi výpočetního modelu se parametry domu přímo nepromítají do elektrické spotřeby "
-        "(počítá se hlavně obsazenost + stochastické spotřebiče). UI i uložení ale zachovávám."
+    st.write(
+        "Zadej parametry domu. Aplikace jim automaticky přiřadí jeden z **50 hodinových profilů potřeby tepla (P4)** "
+        "podobně jako se přiřazují profily obsazenosti u uživatelů."
     )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        floor_area = st.number_input("Podlahová plocha (m²)", min_value=20.0, max_value=600.0, value=100.0, step=5.0)
+    with c2:
+        floors = st.selectbox("Podlaží", [1, 2], index=0)
+    with c3:
+        year = st.number_input("Rok výstavby / rekonstrukce", min_value=1900, max_value=2100, value=2000, step=1)
+
+    # Assign profile id (1..50) deterministically in the model
+    try:
+        assigned_profile_id = model.assign_house_profile_id(
+            floor_area=float(floor_area),
+            floors=int(floors),
+            year=int(year),
+        )
+        st.info(f"Přiřazený profil domu (P4): **{assigned_profile_id}**")
+    except Exception as e:
+        st.warning("Nepodařilo se přiřadit profil domu. Zkontroluj parametry.")
+        st.exception(e)
+        assigned_profile_id = 1
+
+    st.subheader("Vytápění (volitelné)")
+    heating_system = st.selectbox(
+        "Typ vytápění, který se promítne do elektrické spotřeby",
+        ["none", "direct_electric", "heat_pump"],
+        index=0,
+        help="none = dům neovlivní spotřebu; direct_electric = COP 1; heat_pump = tepelné čerpadlo (COP podle teploty)",
+    )
+    hp_cop_nominal = 3.0
+    if heating_system == "heat_pump":
+        hp_cop_nominal = st.slider("Jmenovité COP (fallback)", min_value=2.0, max_value=4.5, value=3.0, step=0.1)
+
+    st.session_state.house = {
+        "floor_area": float(floor_area),
+        "floors": int(floors),
+        "year": int(year),
+        "assigned_profile_id": int(assigned_profile_id),
+        "heating_system": heating_system,
+        "hp_cop_nominal": float(hp_cop_nominal),
+    }
 
     st.divider()
     if st.button("Pokračovat na Krok 6 →", type="primary"):
@@ -433,8 +438,10 @@ elif int(st.session_state.step) == 7:
             education_level=education_level,
         )
         base_consumption = float(np.sum(consumption))
-        st.write("DEBUG: education_level použité ve výpočtu:", education_level)
-        st.write("DEBUG: roční spotřeba (kWh):", float(np.sum(consumption)))
+        with st.expander("Debug (volitelné)"):
+            st.write("education_level:", education_level)
+            st.write("roční spotřeba (kWh):", float(np.sum(consumption)))
+
 
         # EV
         ev_cfg = st.session_state.ev or {}
@@ -446,16 +453,50 @@ elif int(st.session_state.step) == 7:
                     annual_km=float(ev_cfg.get("annual_km", 0)),
                 )
 
-        total_consumption = float(np.sum(consumption))
-        ev_consumption = float(total_consumption - base_consumption)
-
-        # Location
+        # Location (needed for heat pump COP)
         loc_name = st.session_state.location
         if loc_name and loc_name in temp_model.climate_data:
             location = temp_model.climate_data[loc_name]
         else:
             location = list(temp_model.climate_data.values())[0]
             loc_name = location.name
+
+        # House (P4 heat-demand profile) -> optional heating electricity
+        house_cfg = st.session_state.house or {}
+        floor_area = float(house_cfg.get("floor_area", 100.0))
+        floors = int(house_cfg.get("floors", 1))
+        year = int(house_cfg.get("year", 2000))
+        heating_system = str(house_cfg.get("heating_system", "none"))
+        hp_cop_nominal = float(house_cfg.get("hp_cop_nominal", 3.0))
+
+        heating_electric_kwh = 0.0
+        assigned_house_profile_id = None
+
+        try:
+            assigned_house_profile_id, heat_profile = temp_model.get_house_heat_profile(
+                floor_area=floor_area,
+                floors=floors,
+                year=year,
+            )
+            if heating_system != "none":
+                before = float(np.sum(consumption))
+                consumption = temp_model.add_heating_to_consumption(
+                    consumption_kwh=consumption,
+                    heat_demand_kwh_th=heat_profile,
+                    heating_system=heating_system,
+                    location=location,
+                    hp_cop_nominal=hp_cop_nominal,
+                )
+                heating_electric_kwh = float(np.sum(consumption)) - before
+        except Exception as e:
+            # If something is off with P4 loading, keep going without heating
+            st.warning("Nepodařilo se aplikovat profil domu (P4) do spotřeby. Pokračuji bez vytápění.")
+            st.exception(e)
+
+        # Totals
+        total_consumption = float(np.sum(consumption))
+        ev_consumption = float((np.sum(consumption) - heating_electric_kwh) - base_consumption)
+
 
         # Optimize
         if max_power < min_power:
@@ -488,6 +529,7 @@ elif int(st.session_state.step) == 7:
             },
             "consumption": {
                 "base": round(base_consumption, 0),
+                "heating": round(heating_electric_kwh, 0),
                 "ev": round(ev_consumption, 0),
                 "total": round(total_consumption, 0),
             },
@@ -586,17 +628,22 @@ elif int(st.session_state.step) == 7:
         plt.grid(axis="y", alpha=0.3)
         st.pyplot(fig2, clear_figure=True)
 
-        # Consumption breakdown pie (base vs EV)
+        # Consumption breakdown pie (base vs heating vs EV)
         fig3 = plt.figure(figsize=(7, 5))
-        labels = ["Base", "EV"]
-        sizes = [r["consumption"]["base"], r["consumption"]["ev"]]
-        if r["consumption"]["ev"] > 0:
+        labels = ["Base", "Heating", "EV"]
+        sizes = [r["consumption"]["base"], r["consumption"].get("heating", 0), r["consumption"]["ev"]]
+
+        if (r["consumption"].get("heating", 0) > 0) or (r["consumption"]["ev"] > 0):
             plt.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=90)
             plt.axis("equal")
         else:
-            plt.text(0.5, 0.5, f"Total: {r['consumption']['total']:,.0f} kWh/yr\n(No EV)",
-                     ha="center", va="center", fontsize=14)
+            plt.text(
+                0.5, 0.5,
+                f"Total: {r['consumption']['total']:,.0f} kWh/yr",
+                ha="center", va="center", fontsize=14
+            )
             plt.axis("off")
+
         plt.title("Consumption breakdown")
         st.pyplot(fig3, clear_figure=True)
 
@@ -616,6 +663,7 @@ elif int(st.session_state.step) == 7:
             "occupancy_rate_pct": r["household"]["occupancy_rate"],
             "location": r["household"]["location"],
             "consumption_base_kwh": r["consumption"]["base"],
+            "consumption_heating_kwh": r["consumption"].get("heating", 0),
             "consumption_ev_kwh": r["consumption"]["ev"],
             "consumption_total_kwh": r["consumption"]["total"],
             "optimal_pv_kwp": r["optimal_system"]["pv_power"],
