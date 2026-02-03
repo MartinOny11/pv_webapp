@@ -275,6 +275,126 @@ class HouseholdModel:
         except Exception as e:
             print(f"Error loading house profiles: {e}")
     
+
+    # -------------------------------------------------
+    # House profile assignment (P4) based on building params
+    # -------------------------------------------------
+    def _bin_floor_area(self, area: float) -> int:
+        """5 bins for floor area -> 1..5"""
+        area = float(area)
+        if area < 70:
+            return 1
+        if area < 100:
+            return 2
+        if area < 130:
+            return 3
+        if area < 170:
+            return 4
+        return 5
+
+    def _bin_year(self, year: int) -> int:
+        """5 bins for (construction/renovation) year -> 1..5"""
+        y = int(year)
+        if y < 1970:
+            return 1
+        if y < 1990:
+            return 2
+        if y < 2005:
+            return 3
+        if y < 2015:
+            return 4
+        return 5
+
+    def _bin_floors(self, floors: int) -> int:
+        """2 bins for floors -> 1..2"""
+        return 1 if int(floors) <= 1 else 2
+
+    def assign_house_profile_id(self, floor_area: float, floors: int, year: int) -> int:
+        """
+        Deterministic mapping (like user profiles):
+        5 (area) × 5 (year) × 2 (floors) = 50 profiles.
+
+        Returns:
+            profile_id in range 1..50
+        """
+        a = self._bin_floor_area(floor_area)   # 1..5
+        y = self._bin_year(year)               # 1..5
+        f = self._bin_floors(floors)           # 1..2
+        return int((a - 1) * 10 + (y - 1) * 2 + (f - 1) + 1)
+
+    def get_house_heat_profile(self, floor_area: float, floors: int, year: int) -> tuple[int, np.ndarray]:
+        """
+        Get assigned P4 heat demand profile (8760) and scale by floor area.
+
+        Returns:
+            (assigned_profile_id, heat_demand_kwh_th_per_h[8760])
+        """
+        profile_id = self.assign_house_profile_id(floor_area=floor_area, floors=floors, year=year)
+
+        # P4 loader stores profiles as House objects with thermal_demand.
+        if profile_id not in self.house_profiles:
+            raise ValueError(
+                f"House profile {profile_id} not found in loaded P4 data. "
+                f"Loaded IDs: {sorted(self.house_profiles.keys())[:10]}..."
+            )
+
+        base_house = self.house_profiles[profile_id]
+        thermal = np.array(base_house.thermal_demand, dtype=float)
+
+        if thermal.shape[0] != 8760:
+            raise ValueError(f"House profile {profile_id} must have 8760 values, got {thermal.shape[0]}")
+
+        # Scale: assume P4 profiles represent ~100 m² baseline
+        scale = float(floor_area) / 100.0
+        thermal_scaled = thermal * scale
+        return int(profile_id), thermal_scaled
+
+    def add_heating_to_consumption(
+        self,
+        consumption_kwh: np.ndarray,
+        heat_demand_kwh_th: np.ndarray,
+        heating_system: str,
+        location: Optional[Location] = None,
+        hp_cop_nominal: float = 3.0,
+    ) -> np.ndarray:
+        """
+        Convert heat demand to electricity and add it to consumption.
+        heating_system:
+          - 'none'
+          - 'direct_electric'  (COP = 1)
+          - 'heat_pump'        (COP depends on outdoor temperature if available, else hp_cop_nominal)
+        """
+        out = np.array(consumption_kwh, dtype=float).copy()
+
+        system = (heating_system or "none").lower().strip()
+        if system == "none":
+            return out
+
+        heat = np.array(heat_demand_kwh_th, dtype=float)
+        if heat.shape[0] != 8760:
+            raise ValueError(f"heat_demand_kwh_th must have 8760 values, got {heat.shape[0]}")
+
+        if system == "direct_electric":
+            out += heat
+            return out
+
+        if system == "heat_pump":
+            # Simple COP model based on temperature, fallback to constant COP.
+            cop = None
+            if location is not None and hasattr(location, "temperature"):
+                temp = np.array(location.temperature, dtype=float)
+                if temp.shape[0] == 8760:
+                    # COP approx: 0°C -> 2.0, 10°C -> 2.6, 20°C -> 3.2
+                    cop = np.clip(2.0 + 0.06 * temp, 1.5, 4.0)
+
+            if cop is None:
+                cop = np.full(8760, float(hp_cop_nominal))
+
+            out += heat / cop
+            return out
+
+        raise ValueError(f"Unknown heating_system: {heating_system}")
+
     def add_user(self, gender: str, age: int, status: str):
         """Add a household member"""
         user = User(gender=gender, age=age, status=status)
