@@ -746,7 +746,8 @@ class HouseholdModel:
             return (lo + hi) / 2
 
         irr_rate = _irr_bisection()
-        irr = irr_rate * 100 if np.isfinite(irr_rate) else float('nan')
+        # irr_rate is a decimal (e.g., 0.12 = 12%); expose percent for UI.
+        irr_percent = irr_rate * 100 if np.isfinite(irr_rate) else float("nan")
 
         results = {
             'pv_cost': pv_cost,
@@ -755,9 +756,10 @@ class HouseholdModel:
             'total_cost_with_subsidy': total_cost,
             'annual_savings': annual_savings,
             'npv': npv,
-            'irr': irr * 100,  # as percentage
+            'irr': irr_percent,  # percent (e.g., 12.3)
             'payback_period': payback_period,
-            'recommended': payback_period <= 15 and irr >= 0.05
+            # Recommended if payback <= 15 years and IRR >= 5%
+            'recommended': (payback_period <= 15) and (np.isfinite(irr_rate) and (irr_rate >= 0.05)),
         }
         
         return results
