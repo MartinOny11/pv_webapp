@@ -711,9 +711,43 @@ class HouseholdModel:
         # Simple payback period
         payback_period = total_cost / annual_savings if annual_savings > 0 else float('inf')
         
-        # Estimate IRR (simplified - would need iterative solver)
-        irr = (annual_savings / total_cost - 0.02) if total_cost > 0 else 0
-        
+        # IRR (Internal Rate of Return) computed from yearly cash-flows
+        # Cash-flow convention: year 0 is the investment (negative), years 1..lifetime are annual net benefits.
+        cash_flows = [-total_cost]
+        for year in range(1, lifetime + 1):
+            degradation_factor = (1 - 0.005) ** year
+            cash_flows.append(annual_savings * degradation_factor)
+
+        def _npv(rate: float) -> float:
+            return sum(cf / ((1 + rate) ** t) for t, cf in enumerate(cash_flows))
+
+        def _irr_bisection() -> float:
+            # Find rate where NPV(rate)=0. Use bisection with expanding bounds.
+            lo, hi = -0.9, 1.0
+            f_lo, f_hi = _npv(lo), _npv(hi)
+
+            # Expand upper bound if needed (up to 5x = 500%).
+            while f_lo * f_hi > 0 and hi < 5.0:
+                hi *= 1.5
+                f_hi = _npv(hi)
+
+            if f_lo * f_hi > 0:
+                return float('nan')
+
+            for _ in range(80):
+                mid = (lo + hi) / 2
+                f_mid = _npv(mid)
+                if abs(f_mid) < 1e-6:
+                    return mid
+                if f_lo * f_mid <= 0:
+                    hi, f_hi = mid, f_mid
+                else:
+                    lo, f_lo = mid, f_mid
+            return (lo + hi) / 2
+
+        irr_rate = _irr_bisection()
+        irr = irr_rate * 100 if np.isfinite(irr_rate) else float('nan')
+
         results = {
             'pv_cost': pv_cost,
             'battery_cost': battery_cost,
@@ -733,7 +767,9 @@ class HouseholdModel:
                         location: Location,
                         min_power: float = 1,
                         max_power: float = 15,
-                        step: float = 0.5) -> Tuple[float, float, Dict]:
+                        step: float = 0.5,
+                        electricity_price: float = 4.5,
+                        feed_in_tariff: float = 1.5) -> Tuple[float, float, Dict]:
         """
         Find optimal PV system size by maximizing NPV
         
@@ -767,11 +803,13 @@ class HouseholdModel:
                 economics = self.calculate_economics(
                     energy_balance=energy_balance,
                     installed_power=pv_power,
-                    battery_capacity=battery_cap
+                    battery_capacity=battery_cap,
+                    electricity_price=float(electricity_price),
+                    feed_in_tariff=float(feed_in_tariff),
                 )
                 
                 # Check if this is better
-                if economics['npv'] > best_npv and economics['irr'] >= 5:  # IRR >= 5% constraint
+                if economics['npv'] > best_npv and np.isfinite(economics.get('irr', float('nan'))) and economics['irr'] >= 5:  # IRR >= 5% constraint
                     best_npv = economics['npv']
                     best_pv_power = pv_power
                     best_battery_capacity = battery_cap
