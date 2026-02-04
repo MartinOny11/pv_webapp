@@ -46,6 +46,65 @@ REQUIRED_FILES = [
 
 
 # ----------------------------
+# UI text mappings (CZ -> internal EN codes)
+# ----------------------------
+GENDER_MAP = {"Žena": "female", "Muž": "male"}
+GENDER_MAP_REV = {v: k for k, v in GENDER_MAP.items()}
+
+STATUS_MAP = {
+    "Student": "student",
+    "Home office": "home_office",
+    "Práce 8–16": "classic_8_16",
+    "Ranní směna": "morning_shift",
+    "Noční směna": "night_shift",
+    "Nezaměstnaný": "unemployed",
+    "Důchodce": "retired",
+}
+STATUS_MAP_REV = {v: k for k, v in STATUS_MAP.items()}
+
+EDUCATION_MAP = {
+    "Základní": "basic",
+    "Středoškolské": "high_school",
+    "Vysokoškolské": "university",
+}
+EDUCATION_MAP_REV = {v: k for k, v in EDUCATION_MAP.items()}
+
+APPLIANCE_METHOD_MAP = {
+    "Rychlý odhad (podle vzdělání)": "quick_estimate",
+    "Vlastní výběr spotřebičů": "custom_selection",
+}
+
+HEATING_MAP = {
+    "Bez elektrického vytápění": "none",
+    "Přímotopy / elektrokotel": "direct_electric",
+    "Tepelné čerpadlo": "heat_pump",
+}
+HEATING_MAP_REV = {v: k for k, v in HEATING_MAP.items()}
+
+def _pretty_user_df(rows: list[dict]) -> pd.DataFrame:
+    """Show users table in Czech while keeping internal codes in session."""
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).copy()
+    if "gender" in df.columns:
+        df["pohlaví"] = df["gender"].map(GENDER_MAP_REV).fillna(df["gender"])
+        df.drop(columns=["gender"], inplace=True)
+    if "status" in df.columns:
+        df["režim"] = df["status"].map(STATUS_MAP_REV).fillna(df["status"])
+        df.drop(columns=["status"], inplace=True)
+    if "age" in df.columns:
+        df.rename(columns={"age": "věk"}, inplace=True)
+    if "profile_id" in df.columns:
+        df.rename(columns={"profile_id": "profil"}, inplace=True)
+    if "is_primary" in df.columns:
+        df["primární"] = df["is_primary"].map({True: "ano", False: "ne"})
+        df.drop(columns=["is_primary"], inplace=True)
+    # Reorder common columns
+    cols = [c for c in ["primární", "pohlaví", "věk", "režim", "profil"] if c in df.columns] +            [c for c in df.columns if c not in ["primární", "pohlaví", "věk", "režim", "profil"]]
+    return df[cols]
+
+
+# ----------------------------
 # Helpers
 # ----------------------------
 def have_all_required_files(folder: Path) -> bool:
@@ -177,14 +236,13 @@ if int(st.session_state.step) == 1:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        gender = st.selectbox("Pohlaví", ["female", "male"])
+        gender_cz = st.selectbox("Pohlaví", list(GENDER_MAP.keys()))
+        gender = GENDER_MAP[gender_cz]
     with c2:
         age = st.number_input("Věk", min_value=0, max_value=100, value=30, step=1)
     with c3:
-        status = st.selectbox(
-            "Režim",
-            ["student", "home_office", "classic_8_16", "morning_shift", "night_shift", "unemployed", "retired"],
-        )
+        status_cz = st.selectbox("Režim", list(STATUS_MAP.keys()))
+        status = STATUS_MAP[status_cz]
 
     if st.button("Uložit primárního uživatele →", type="primary"):
         user = User(gender=gender, age=int(age), status=status)
@@ -212,21 +270,19 @@ elif int(st.session_state.step) == 2:
         st.stop()
 
     st.subheader("Aktuální členové")
-    df_users = pd.DataFrame(st.session_state.users)
+    df_users = _pretty_user_df(st.session_state.users)
     st.dataframe(df_users, use_container_width=True)
 
     st.subheader("Přidat člena")
     c1, c2, c3 = st.columns(3)
     with c1:
-        m_gender = st.selectbox("Pohlaví člena", ["female", "male"], key="m_gender")
+        m_gender_cz = st.selectbox("Pohlaví člena", list(GENDER_MAP.keys()), key="m_gender")
+        m_gender = GENDER_MAP[m_gender_cz]
     with c2:
         m_age = st.number_input("Věk člena", min_value=0, max_value=100, value=25, step=1, key="m_age")
     with c3:
-        m_status = st.selectbox(
-            "Režim člena",
-            ["student", "home_office", "classic_8_16", "morning_shift", "night_shift", "unemployed", "retired"],
-            key="m_status"
-        )
+        m_status_cz = st.selectbox("Režim člena", list(STATUS_MAP.keys()), key="m_status")
+        m_status = STATUS_MAP[m_status_cz]
 
     cbtn1, cbtn2 = st.columns(2)
     with cbtn1:
@@ -259,22 +315,25 @@ elif int(st.session_state.step) == 2:
 elif int(st.session_state.step) == 3:
     st.header("Krok 3: Spotřebiče")
 
-    method = st.radio("Způsob zadání spotřeby", ["quick_estimate", "custom_selection"], index=0, horizontal=True)
+    method_cz = st.radio("Způsob zadání spotřeby", list(APPLIANCE_METHOD_MAP.keys()), index=0, horizontal=True)
+
+    method = APPLIANCE_METHOD_MAP[method_cz]
 
     if method == "quick_estimate":
-        education_level = st.selectbox("Úroveň (pro rychlý odhad)", ["basic", "high_school", "university"], index=2)
+        edu_cz = st.selectbox("Úroveň (pro rychlý odhad)", list(EDUCATION_MAP.keys()), index=2)
+        education_level = EDUCATION_MAP[edu_cz]
         st.session_state.appliances = {"method": "quick_estimate", "education_level": education_level}
-        st.info("Rychlý odhad používá stochastický model; education_level ovlivňuje velikost/četnost špiček a základní spotřebu.")
+        st.info("Rychlý odhad používá stochastický model; vzdělání ovlivňuje velikost/četnost špiček a základní spotřebu.")
 
     else:
         st.warning(
-            "Custom výběr spotřebičů je v původním kódu uložen do session, "
+            "Vlastní výběr spotřebičů je v původním kódu uložen do session, "
             "ale výpočetní model ho zatím nepoužívá. Zachovávám ho jako UI funkci."
         )
         selected = st.text_area(
             "Zadej seznam spotřebičů (např. názvy oddělené čárkou)",
             value="",
-            help="Placeholder – data se uloží do session, ale výpočet se řídí generate_consumption_profile()."
+            help="Pozn.: Zatím se ukládá jen pro export; výpočet spotřeby se řídí stochastickým modelem."
         )
         appliances_list = [x.strip() for x in selected.split(",") if x.strip()]
         st.session_state.appliances = {"method": "custom", "selected": appliances_list}
@@ -340,12 +399,13 @@ elif int(st.session_state.step) == 5:
         assigned_profile_id = 1
 
     st.subheader("Vytápění (volitelné)")
-    heating_system = st.selectbox(
+    heating_cz = st.selectbox(
         "Typ vytápění, který se promítne do elektrické spotřeby",
-        ["none", "direct_electric", "heat_pump"],
+        list(HEATING_MAP.keys()),
         index=0,
-        help="none = dům neovlivní spotřebu; direct_electric = COP 1; heat_pump = tepelné čerpadlo (COP podle teploty)",
+        help="Bez elektrického vytápění = dům neovlivní spotřebu; Přímotopy/elektrokotel = COP 1; Tepelné čerpadlo = COP podle teploty",
     )
+    heating_system = HEATING_MAP[heating_cz]
     hp_cop_nominal = 3.0
     if heating_system == "heat_pump":
         hp_cop_nominal = st.slider("Jmenovité COP (fallback)", min_value=2.0, max_value=4.5, value=3.0, step=0.1)
@@ -445,8 +505,8 @@ elif int(st.session_state.step) == 7:
         )
         base_consumption = float(np.sum(consumption))
         with st.expander("Debug (volitelné)"):
-            st.write("education_level:", education_level)
-            st.write("roční spotřeba (kWh):", float(np.sum(consumption)))
+            st.write("Vzdělání (interní kód):", education_level)
+            st.write("Roční spotřeba (kWh):", float(np.sum(consumption)))
 
 
         # EV
@@ -619,30 +679,30 @@ elif int(st.session_state.step) == 7:
 
         # Pie: energy balance
         fig1 = plt.figure(figsize=(7, 5))
-        labels = ["Self-consumption", "Grid export", "Grid import"]
+        labels = ["Vlastní spotřeba", "Export do sítě", "Import ze sítě"]
         sizes = [eb["self_consumption"], eb["grid_export"], eb["grid_import"]]
         plt.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=90)
-        plt.title("Annual energy balance")
+        plt.title("Roční energetická bilance")
         plt.axis("equal")
         st.pyplot(fig1, clear_figure=True)
 
         # Bar: economics overview
         fig2 = plt.figure(figsize=(7, 5))
-        categories = ["Investment", "Annual savings (x10)", "NPV (÷1000)"]
+        categories = ["Investice", "Roční úspora (×10)", "NPV (÷1000)"]
         values = [
             ec["total_cost_with_subsidy"],
             ec["annual_savings"] * 10,
             ec["npv"] / 1000,
         ]
         plt.bar(categories, values)
-        plt.title("Economic overview")
-        plt.ylabel("CZK")
+        plt.title("Přehled ekonomiky")
+        plt.ylabel("Kč")
         plt.grid(axis="y", alpha=0.3)
         st.pyplot(fig2, clear_figure=True)
 
         # Consumption breakdown pie (base vs heating vs EV)
         fig3 = plt.figure(figsize=(7, 5))
-        labels = ["Base", "Heating", "EV"]
+        labels = ["Základ", "Vytápění", "Elektromobil"]
         sizes = [r["consumption"]["base"], r["consumption"].get("heating", 0), r["consumption"]["ev"]]
 
         if (r["consumption"].get("heating", 0) > 0) or (r["consumption"]["ev"] > 0):
@@ -656,7 +716,7 @@ elif int(st.session_state.step) == 7:
             )
             plt.axis("off")
 
-        plt.title("Consumption breakdown")
+        plt.title("Skladba spotřeby")
         st.pyplot(fig3, clear_figure=True)
 
         # Exports
