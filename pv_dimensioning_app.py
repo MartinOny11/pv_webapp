@@ -266,7 +266,7 @@ class HouseholdModel:
                         wall_construction='brick',
                         wall_material='brick',
                         wall_thickness=0.4,
-                        thermal_demand=thermal_data[:8760].astype(float)  # Ensure float array
+                        thermal_demand=(thermal_data[:8760].astype(float) / 1000.0)  # P4 is Wh/h -> convert to kWh/h
                     )
                     self.house_profiles[col_idx] = house
             
